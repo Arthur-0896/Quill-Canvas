@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "quill-canvas-backend"
+version = "0.1.0"
+description = "FastAPI backend scaffold for the Quill Canvas storybook generator."
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "0.111.3"
+uvicorn = {extras = ["standard"], version = "0.23.0"}
+httpx = "0.26.2"
+python-dotenv = "1.0.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
