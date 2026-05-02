@@ -433,9 +433,9 @@ def generate_pdf(req: PDFRequest):
                 scaled_width = img_width * scale
                 scaled_height = img_height * scale
                 
-                # Center the image in the right column
+                # Center the image in the right column (both horizontally and vertically)
                 x_img = x_right + (column_width - scaled_width) / 2
-                y_img = margin
+                y_img = margin + (available_height - scaled_height) / 2
                 
                 logger.info(f"[PDF] Drawing image at ({x_img}, {y_img}) size {scaled_width}x{scaled_height}")
                 
