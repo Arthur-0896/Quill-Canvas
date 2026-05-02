@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://quill_user:quill_pass@postgres:5432/quill_canvas
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=us-east-1
+      - BACKBOARD_API_KEY=${BACKBOARD_API_KEY}
+      - BACKBOARD_ASSISTANT_ID=${BACKBOARD_ASSISTANT_ID}
+      - BACKBOARD_WORKFLOW_ID=${BACKBOARD_WORKFLOW_ID}
+      - BACKBOARD_BASE_URL=${BACKBOARD_BASE_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app/backend  # Hot reload in development
+    networks:
+      - quill-network
+    command: python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: quill_user
+      POSTGRES_PASSWORD: quill_pass
+      POSTGRES_DB: quill_canvas
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quill_user -d quill_canvas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - quill-network
+
+  # Redis (for WebSocket scaling)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - quill-network
+
+  # React Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/src:/app/src  # Hot reload in development
+    networks:
+      - quill-network
+    command: npm start
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  quill-network:
+    driver: bridge
