@@ -1,10 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import requests
 import time
 import os
 import logging
+import tempfile
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_CENTER
+from reportlab.lib import colors
+from PIL import Image as PILImage
 
 # ---------------- LOGGING SETUP ----------------
 logging.basicConfig(
@@ -52,21 +61,14 @@ class StoryRequest(BaseModel):
     story: str
 
 
+class PDFRequest(BaseModel):
+    story: str
+    image_url: str
+    prompt: str = ""
+
+
 # ---------------- BACKBOARD CALL ----------------
 def generate_prompt_with_backboard(story: str, max_retries: int = 3) -> str:
-    """
-    Generate a prompt using Backboard AI assistant.
-    
-    Args:
-        story: The story text to send to Backboard
-        max_retries: Maximum number of retry attempts
-        
-    Returns:
-        Generated prompt string
-        
-    Raises:
-        HTTPException: If the API call fails after retries
-    """
     for attempt in range(max_retries):
         try:
             logger.info(f"[Backboard] Attempt {attempt + 1}/{max_retries}: Sending story ({len(story)} chars)")
@@ -81,23 +83,19 @@ def generate_prompt_with_backboard(story: str, max_retries: int = 3) -> str:
                 timeout=30
             )
             
-            # Log response status
             logger.info(f"[Backboard] Response status: {response.status_code}")
             
-            # Check for rate limiting
             if response.status_code == 429:
                 wait_time = int(response.headers.get("Retry-After", 60))
                 logger.warning(f"[Backboard] Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             
-            # Raise for bad status codes
             response.raise_for_status()
             
             data = response.json()
             logger.debug(f"[Backboard] Response data: {data}")
             
-            # Extract prompt from response
             prompt = data.get("content") or data.get("response") or data.get("message")
             
             if not prompt:
@@ -111,7 +109,7 @@ def generate_prompt_with_backboard(story: str, max_retries: int = 3) -> str:
             logger.error(f"[Backboard] Request timeout on attempt {attempt + 1}")
             if attempt == max_retries - 1:
                 raise HTTPException(status_code=504, detail="Backboard API timeout")
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(2 ** attempt)
             
         except requests.exceptions.RequestException as e:
             logger.error(f"[Backboard] Request error: {str(e)}")
@@ -128,19 +126,6 @@ def generate_prompt_with_backboard(story: str, max_retries: int = 3) -> str:
 
 # ---------------- LEONARDO ----------------
 def create_generation(prompt: str, max_retries: int = 3) -> str:
-    """
-    Create an image generation job with Leonardo AI.
-    
-    Args:
-        prompt: The text prompt for image generation
-        max_retries: Maximum number of retry attempts
-        
-    Returns:
-        Generation ID string
-        
-    Raises:
-        HTTPException: If the API call fails after retries
-    """
     for attempt in range(max_retries):
         try:
             logger.info(f"[Leonardo] Attempt {attempt + 1}/{max_retries}: Creating generation")
@@ -162,14 +147,12 @@ def create_generation(prompt: str, max_retries: int = 3) -> str:
             
             logger.info(f"[Leonardo] Create response status: {res.status_code}")
             
-            # Handle rate limiting
             if res.status_code == 429:
                 wait_time = int(res.headers.get("Retry-After", 60))
                 logger.warning(f"[Leonardo] Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
             
-            # Check for other errors
             if res.status_code != 200:
                 logger.error(f"[Leonardo] Error response: {res.text}")
                 if attempt == max_retries - 1:
@@ -205,20 +188,6 @@ def create_generation(prompt: str, max_retries: int = 3) -> str:
 
 
 def wait_for_image(gen_id: str, timeout: int = 300, poll_interval: int = 3) -> str:
-    """
-    Poll Leonardo API until image generation is complete.
-    
-    Args:
-        gen_id: Generation ID to poll
-        timeout: Maximum time to wait in seconds (default 5 minutes)
-        poll_interval: Time between polls in seconds
-        
-    Returns:
-        URL of the generated image
-        
-    Raises:
-        HTTPException: If generation fails or times out
-    """
     start_time = time.time()
     attempt = 0
     
@@ -228,7 +197,6 @@ def wait_for_image(gen_id: str, timeout: int = 300, poll_interval: int = 3) -> s
         attempt += 1
         elapsed = time.time() - start_time
         
-        # Check timeout
         if elapsed > timeout:
             logger.error(f"[Leonardo] Timeout after {elapsed:.1f}s")
             raise HTTPException(status_code=504, detail=f"Image generation timed out after {timeout}s")
@@ -249,18 +217,15 @@ def wait_for_image(gen_id: str, timeout: int = 300, poll_interval: int = 3) -> s
             
             data = res.json()
             
-            # Check generation status
             generation_data = data.get("generations_by_pk", {})
             status = generation_data.get("status")
             
             logger.info(f"[Leonardo] Generation status: {status}")
             
-            # Check for failure
             if status == "FAILED":
                 logger.error(f"[Leonardo] Generation failed: {generation_data}")
                 raise HTTPException(status_code=500, detail="Image generation failed")
             
-            # Check for completed images
             images = generation_data.get("generated_images", [])
             
             if images and len(images) > 0:
@@ -269,13 +234,11 @@ def wait_for_image(gen_id: str, timeout: int = 300, poll_interval: int = 3) -> s
                     logger.info(f"[Leonardo] Image ready: {image_url}")
                     return image_url
             
-            # Wait before next poll
             logger.debug(f"[Leonardo] No images yet, waiting {poll_interval}s...")
             time.sleep(poll_interval)
             
         except requests.exceptions.RequestException as e:
             logger.error(f"[Leonardo] Poll error: {str(e)}")
-            # Don't fail on poll errors, just retry
             time.sleep(poll_interval)
     
     raise HTTPException(status_code=500, detail="Unexpected exit from polling loop")
@@ -284,32 +247,20 @@ def wait_for_image(gen_id: str, timeout: int = 300, poll_interval: int = 3) -> s
 # ---------------- MAIN ROUTE ----------------
 @app.post("/generate")
 def generate(req: StoryRequest):
-    """
-    Main endpoint to generate illustration from story.
-    
-    Process:
-    1. Send story to Backboard AI to generate image prompt
-    2. Send prompt to Leonardo AI to create image
-    3. Poll Leonardo until image is ready
-    4. Return image URL and metadata
-    """
     try:
         logger.info("="*60)
         logger.info(f"[MAIN] New request received")
         logger.info(f"[MAIN] Story length: {len(req.story)} characters")
         logger.info(f"[MAIN] Story preview: {req.story[:100]}...")
         
-        # STEP 1: Backboard → prompt
         logger.info("[MAIN] Step 1: Generating prompt with Backboard...")
         prompt = generate_prompt_with_backboard(req.story)
         logger.info(f"[MAIN] Step 1 complete. Prompt: {prompt[:100]}...")
         
-        # STEP 2: prompt → image generation
         logger.info("[MAIN] Step 2: Creating Leonardo generation...")
         gen_id = create_generation(prompt)
         logger.info(f"[MAIN] Step 2 complete. Generation ID: {gen_id}")
         
-        # STEP 3: wait for image
         logger.info("[MAIN] Step 3: Waiting for image...")
         image_url = wait_for_image(gen_id)
         logger.info(f"[MAIN] Step 3 complete. Image URL: {image_url}")
@@ -339,6 +290,202 @@ def generate(req: StoryRequest):
         logger.info("="*60)
         
         raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
+
+
+# ---------------- PDF GENERATION ----------------
+@app.post("/generate-pdf")
+def generate_pdf(req: PDFRequest):
+    """
+    Generate a landscape A4 PDF with story and image side-by-side.
+    """
+    try:
+        logger.info("="*60)
+        logger.info("[PDF] Generating landscape PDF...")
+        logger.info(f"[PDF] Story length: {len(req.story)} characters")
+        logger.info(f"[PDF] Image URL: {req.image_url}")
+        
+        # Create temporary filenames (cross-platform)
+        temp_dir = tempfile.gettempdir()
+        pdf_filename = os.path.join(temp_dir, f"story_illustration_{int(time.time())}.pdf")
+        temp_image_path = os.path.join(temp_dir, f"temp_image_{int(time.time())}.png")
+        
+        logger.info(f"[PDF] Temp dir: {temp_dir}")
+        logger.info(f"[PDF] PDF path: {pdf_filename}")
+        logger.info(f"[PDF] Image path: {temp_image_path}")
+        
+        # Download image
+        logger.info("[PDF] Downloading image...")
+        img_response = requests.get(req.image_url, timeout=30)
+        img_response.raise_for_status()
+        
+        # Save image temporarily
+        with open(temp_image_path, "wb") as f:
+            f.write(img_response.content)
+        
+        logger.info(f"[PDF] Image saved successfully")
+        
+        # Verify image file exists
+        if not os.path.exists(temp_image_path):
+            raise Exception(f"Image file not created: {temp_image_path}")
+        
+        # Create PDF with landscape A4 format
+        doc = SimpleDocTemplate(
+            pdf_filename,
+            pagesize=landscape(A4),
+            rightMargin=0.5*inch,
+            leftMargin=0.5*inch,
+            topMargin=0.5*inch,
+            bottomMargin=0.5*inch
+        )
+        
+        # Get page dimensions
+        page_width, page_height = landscape(A4)
+        logger.info(f"[PDF] Page size: {page_width} x {page_height}")
+        
+        # Get styles
+        styles = getSampleStyleSheet()
+        
+        # Create custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            textColor=colors.HexColor('#111111'),
+            spaceAfter=20,
+            alignment=TA_CENTER
+        )
+        
+        story_style = ParagraphStyle(
+            'StoryStyle',
+            parent=styles['Normal'],
+            fontSize=11,
+            leading=16,
+            spaceAfter=10,
+            alignment=TA_LEFT
+        )
+        
+        # Build content for side-by-side layout
+        from reportlab.platypus import Frame, PageTemplate
+        from reportlab.pdfgen import canvas as pdf_canvas
+        
+        # Custom function to build the PDF with two-column layout
+        def build_two_column_pdf():
+            c = pdf_canvas.Canvas(pdf_filename, pagesize=landscape(A4))
+            page_width, page_height = landscape(A4)
+            
+            # Define margins and column width
+            margin = 0.5 * inch
+            column_width = (page_width - 3 * margin) / 2  # Split into 2 columns with gap
+            
+            # LEFT SIDE: Story
+            x_left = margin
+            y_start = page_height - margin - 30  # Start below title
+            
+            # Draw title
+            c.setFont("Helvetica-Bold", 20)
+            c.drawString(page_width / 2 - 100, page_height - margin, "Your Story & Illustration")
+            
+            # Draw story text on left
+            c.setFont("Helvetica", 10)
+            y_position = y_start
+            line_height = 14
+            max_width = column_width
+            
+            for paragraph in req.story.split('\n'):
+                if paragraph.strip():
+                    # Word wrap the paragraph
+                    words = paragraph.split()
+                    line = ""
+                    for word in words:
+                        test_line = line + word + " "
+                        if c.stringWidth(test_line, "Helvetica", 10) < max_width:
+                            line = test_line
+                        else:
+                            c.drawString(x_left, y_position, line.strip())
+                            y_position -= line_height
+                            line = word + " "
+                            
+                            if y_position < margin:
+                                break
+                    
+                    if line.strip():
+                        c.drawString(x_left, y_position, line.strip())
+                        y_position -= line_height
+                    
+                    y_position -= line_height * 0.5  # Extra space between paragraphs
+                    
+                    if y_position < margin:
+                        break
+            
+            # RIGHT SIDE: Image
+            x_right = margin + column_width + margin
+            
+            try:
+                # Load and scale image
+                img = PILImage.open(temp_image_path)
+                img_width, img_height = img.size
+                
+                # Calculate scaling to fit right column
+                available_width = column_width
+                available_height = page_height - 2 * margin - 40  # Account for title
+                
+                scale = min(available_width / img_width, available_height / img_height)
+                scaled_width = img_width * scale
+                scaled_height = img_height * scale
+                
+                # Center the image in the right column
+                x_img = x_right + (column_width - scaled_width) / 2
+                y_img = margin
+                
+                logger.info(f"[PDF] Drawing image at ({x_img}, {y_img}) size {scaled_width}x{scaled_height}")
+                
+                c.drawImage(temp_image_path, x_img, y_img, 
+                           width=scaled_width, height=scaled_height, 
+                           preserveAspectRatio=True)
+                
+            except Exception as e:
+                logger.error(f"[PDF] Error drawing image: {str(e)}")
+                c.setFont("Helvetica", 12)
+                c.drawString(x_right, page_height / 2, "Error loading image")
+            
+            # Save PDF
+            c.save()
+            logger.info("[PDF] PDF saved successfully")
+        
+        # Build the PDF
+        build_two_column_pdf()
+        
+        # Clean up temp image
+        try:
+            os.remove(temp_image_path)
+            logger.info("[PDF] Cleaned up temp image")
+        except Exception as e:
+            logger.warning(f"[PDF] Could not delete temp image: {e}")
+        
+        logger.info(f"[PDF] ✓ PDF generated: {pdf_filename}")
+        logger.info("="*60)
+        
+        # Return PDF file
+        return FileResponse(
+            pdf_filename,
+            media_type='application/pdf',
+            filename=f"story_illustration_{int(time.time())}.pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=story_illustration.pdf"
+            }
+        )
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"[PDF] ✗ Error downloading image: {str(e)}")
+        logger.info("="*60)
+        raise HTTPException(status_code=502, detail=f"Failed to download image: {str(e)}")
+        
+    except Exception as e:
+        logger.error(f"[PDF] ✗ Error generating PDF: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        logger.info("="*60)
+        raise HTTPException(status_code=500, detail=f"PDF generation error: {str(e)}")
 
 
 # ---------------- HEALTH CHECK ----------------

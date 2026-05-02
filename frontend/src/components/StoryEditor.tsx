@@ -5,6 +5,7 @@ export default function StoryEditor() {
   const [result, setResult] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [pdfLoading, setPdfLoading] = useState(false);
   const [prompt, setPrompt] = useState<string>("");
   const [generationId, setGenerationId] = useState<string>("");
 
@@ -72,6 +73,56 @@ export default function StoryEditor() {
     }
   };
 
+  const generatePDF = async () => {
+    if (!text.trim() || !result) {
+      setError("Please generate an illustration first");
+      return;
+    }
+
+    try {
+      setPdfLoading(true);
+      console.log("Generating PDF...");
+
+      const res = await fetch("http://localhost:8000/generate-pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          story: text,
+          image_url: result,
+          prompt: prompt,
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.detail || `Error generating PDF: ${res.status}`);
+        return;
+      }
+
+      // Download the PDF
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `story_illustration_${Date.now()}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      console.log("PDF downloaded successfully");
+    } catch (err) {
+      console.error("PDF generation error:", err);
+      setError(
+        err instanceof Error
+          ? `PDF error: ${err.message}`
+          : "Failed to generate PDF"
+      );
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   const clearAll = () => {
     setText("");
     setResult("");
@@ -112,6 +163,19 @@ export default function StoryEditor() {
         >
           {loading ? "Generating..." : "Generate Illustration"}
         </button>
+
+        {result && (
+          <button
+            style={{
+              ...styles.pdfButton,
+              ...(pdfLoading ? styles.buttonDisabled : {}),
+            }}
+            onClick={generatePDF}
+            disabled={pdfLoading || !result}
+          >
+            {pdfLoading ? "Creating PDF..." : "📄 Export to PDF"}
+          </button>
+        )}
 
         {/* Show prompt if available */}
         {prompt && (
@@ -269,6 +333,18 @@ const styles: { [key: string]: React.CSSProperties } = {
   buttonDisabled: {
     backgroundColor: "#999",
     cursor: "not-allowed",
+  },
+  pdfButton: {
+    padding: "14px 24px",
+    fontSize: "16px",
+    fontWeight: 600,
+    backgroundColor: "#0066cc",
+    color: "white",
+    border: "none",
+    borderRadius: "8px",
+    cursor: "pointer",
+    transition: "all 0.2s",
+    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
   },
   promptBox: {
     padding: "16px",
