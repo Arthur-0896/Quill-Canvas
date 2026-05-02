@@ -2,11 +2,10 @@ import React, { useEffect, useState } from "react";
 
 export default function StoryEditor() {
   const [text, setText] = useState("");
-  const [output, setOutput] = useState("");
+  const [imageUrl, setImageUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [hasTriggered, setHasTriggered] = useState(false);
 
-  // word counter
   const getWordCount = (str: string) =>
     str.trim().split(/\s+/).filter(Boolean).length;
 
@@ -22,7 +21,7 @@ export default function StoryEditor() {
 
   const sendToBackend = async () => {
     setLoading(true);
-    setOutput("");
+    setImageUrl("");
 
     try {
       const res = await fetch("http://localhost:8000/generate", {
@@ -37,17 +36,11 @@ export default function StoryEditor() {
 
       console.log("🔵 Backend response:", data);
 
-      // robust parsing (handles all backend shapes)
-      const result =
-        data.output?.content ||
-        data.output?.text ||
-        data.output ||
-        JSON.stringify(data, null, 2);
-
-      setOutput(result);
+      // 🔥 IMPORTANT: backend now returns image_url
+      setImageUrl(data.image_url || "");
     } catch (err) {
       console.error("🔴 Fetch error:", err);
-      setOutput("Error connecting to backend");
+      setImageUrl("");
     } finally {
       setLoading(false);
     }
@@ -55,7 +48,7 @@ export default function StoryEditor() {
 
   const handleReset = () => {
     setHasTriggered(false);
-    setOutput("");
+    setImageUrl("");
     setText("");
   };
 
@@ -76,7 +69,7 @@ export default function StoryEditor() {
           <p>Words: {wordCount} / 300</p>
 
           <button onClick={sendToBackend} style={styles.button}>
-            Generate Now
+            Generate Image
           </button>
 
           <button onClick={handleReset} style={styles.buttonSecondary}>
@@ -88,11 +81,15 @@ export default function StoryEditor() {
       {/* RIGHT */}
       <div style={styles.right}>
         {loading ? (
-          <p>Generating image prompt...</p>
-        ) : output ? (
-          <pre style={styles.output}>{output}</pre>
+          <p>Generating image...</p>
+        ) : imageUrl ? (
+          <img
+            src={imageUrl}
+            style={styles.image}
+            alt="Generated scene"
+          />
         ) : (
-          <p>Output will appear here</p>
+          <p>Image will appear here</p>
         )}
       </div>
     </div>
@@ -115,7 +112,9 @@ const styles: any = {
     flex: 1,
     padding: 20,
     backgroundColor: "#f4f4f4",
-    overflowY: "auto",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   },
   textarea: {
     flex: 1,
@@ -142,8 +141,10 @@ const styles: any = {
     border: "none",
     cursor: "pointer",
   },
-  output: {
-    whiteSpace: "pre-wrap",
-    fontSize: 14,
+  image: {
+    maxWidth: "90%",
+    maxHeight: "90%",
+    borderRadius: 8,
+    boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
   },
 };
