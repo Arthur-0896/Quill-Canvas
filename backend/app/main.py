@@ -1,19 +1,21 @@
 from fastapi import FastAPI
-from app.api.v1.endpoints import router
-from app.core import config
-from app.core.logging import setup_logging, get_logger
+from backend.app.api.v1.endpoints import router as api_router
+from backend.app.config import settings
 
 app = FastAPI(
-    title=config.API_TITLE,
-    description=config.API_DESCRIPTION,
-    version=config.API_VERSION
+    title=settings.api_title,
+    description=settings.api_description,
+    version=settings.api_version,
 )
 
-app.include_router(router)
+app.include_router(api_router)
 
-setup_logging()
-logger = get_logger(__name__)
 
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
+@app.get("/api/health")
+def health_check() -> dict:
+    """Health endpoint for readiness checks."""
+    return {
+        "status": "ok",
+        "environment": settings.environment,
+        "backboard_enabled": settings.backboard_api_key is not None,
+    }

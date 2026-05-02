@@ -1,1 +1,0 @@
-"""Quill Canvas backend package."""

@@ -1,4 +1,4 @@
-from app.schemas import StoryRequest, SceneSummary
+from backend.app.schemas import StoryRequest, SceneSummary
 
 
 def extract_scenes(story: StoryRequest) -> list[SceneSummary]:
