@@ -1,498 +1,760 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 
-export default function StoryEditor() {
-  const [text, setText] = useState("");
-  const [result, setResult] = useState<string>("");
-  const [error, setError] = useState<string>("");
+export default function QuillCanvas() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [currentView, setCurrentView] = useState<"writer" | "generating" | "storybook">("writer");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  const [storyTitle, setStoryTitle] = useState("The Weatherman's Letters");
+  const [storyText, setStoryText] = useState("");
+  const [wordCount, setWordCount] = useState(0);
+  
   const [loading, setLoading] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
-  const [prompt, setPrompt] = useState<string>("");
-  const [generationId, setGenerationId] = useState<string>("");
+  const [error, setError] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [currentStep, setCurrentStep] = useState(0);
+  
+  const [generatedImageUrl, setGeneratedImageUrl] = useState("");
+  const [generatedPrompt, setGeneratedPrompt] = useState("");
+  const [generationId, setGenerationId] = useState("");
 
-  const generateIllustration = async () => {
-    if (!text.trim()) {
-      setError("Please enter a story first");
+  const API_URL = "http://localhost:8000";
+
+  const steps = [
+    "Analyzing your story",
+    "Creating prompt for illustration",
+    "Generating artwork",
+    "Finalizing your storybook"
+  ];
+
+  useEffect(() => {
+    // Load demo story
+    const demoStory = `For thirty years, Marcus predicted the weather with uncanny accuracy. Never wrong. Not once.
+
+His colleagues assumed satellites and algorithms. They didn't know about the letters.
+
+Every evening, Marcus received an envelope slipped under his door. Inside: tomorrow's weather, written in elegant script. No signature. No return address.
+
+He'd tried everything—cameras, stakeouts, moving apartments. The letters always found him.
+
+Tonight, the envelope felt different. Heavier.
+
+Inside, a final forecast and a note:
+
+"I'm dying, Marcus. Forty years ago, I was the weatherman you replaced. I made one catastrophic mistake—told people it would be sunny. A tornado killed seventeen, including my daughter at her outdoor wedding.
+
+I found an old woman who claimed she could see tomorrow. Desperate, I paid her everything. She gave me predictions for the next forty years. Every single day.
+
+I've spent my life making sure no weatherman would fail like I did. The last prediction is yours for tomorrow. After that, you're on your own.
+
+Trust the science. But more importantly, trust that people will forgive honest mistakes made with care."
+
+The next morning, Marcus delivered his first independent forecast.
+
+It was wrong.
+
+And he was finally free.`;
+    
+    setStoryText(demoStory);
+    updateWordCount(demoStory);
+  }, []);
+
+  const updateWordCount = (text: string) => {
+    const trimmed = text.trim();
+    const count = trimmed ? trimmed.split(/\s+/).length : 0;
+    setWordCount(count);
+  };
+
+  const handleTextChange = (text: string) => {
+    setStoryText(text);
+    updateWordCount(text);
+  };
+
+  const doLogin = () => {
+    setIsLoggedIn(true);
+  };
+
+  const generateStory = async () => {
+    if (!storyText.trim()) {
+      setError("Please write a story first!");
       return;
     }
 
+    setLoading(true);
+    setError("");
+    setProgress(0);
+    setCurrentStep(0);
+    setCurrentView("generating");
+
     try {
-      setLoading(true);
-      setError("");
-      setResult("");
-      setPrompt("");
-      setGenerationId("");
+      // Step 1: Analyzing
+      setProgress(25);
+      setCurrentStep(0);
 
-      console.log("Sending request to backend...");
-
-      const res = await fetch("http://localhost:8000/generate", {
+      const response = await fetch(`${API_URL}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ story: text }),
+        body: JSON.stringify({ story: storyText }),
       });
 
-      console.log("Response status:", res.status);
-
-      const data = await res.json();
-      console.log("Response data:", data);
-
-      // Check for errors in response
-      if (!res.ok) {
-        setError(data.detail || `Error: ${res.status} ${res.statusText}`);
-        return;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "Generation failed");
       }
 
-      if (data.error) {
-        setError(data.error);
-        return;
-      }
+      const data = await response.json();
 
-      // Success - set all the data
-      if (data.image_url) {
-        setResult(data.image_url);
-        setPrompt(data.prompt || "");
-        setGenerationId(data.generation_id || "");
-      } else {
-        setError("No image URL returned from server");
-      }
+      // Step 2: Prompt created
+      setProgress(50);
+      setCurrentStep(1);
+      setGeneratedPrompt(data.prompt || "");
+
+      // Step 3: Image generating
+      setProgress(75);
+      setCurrentStep(2);
+      setGeneratedImageUrl(data.image_url || "");
+      setGenerationId(data.generation_id || "");
+
+      // Step 4: Complete
+      setProgress(100);
+      setCurrentStep(3);
+
+      setTimeout(() => {
+        setCurrentView("storybook");
+        setLoading(false);
+      }, 500);
+
     } catch (err) {
-      console.error("Request error:", err);
-      setError(
-        err instanceof Error
-          ? `Network error: ${err.message}`
-          : "Failed to connect to server. Make sure the backend is running on http://localhost:8000"
-      );
-    } finally {
+      console.error("Generation error:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate story");
+      setCurrentView("writer");
       setLoading(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Allow Cmd/Ctrl + Enter to generate
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      generateIllustration();
-    }
-  };
-
-  const generatePDF = async () => {
-    if (!text.trim() || !result) {
-      setError("Please generate an illustration first");
+  const downloadPDF = async () => {
+    if (!storyText || !generatedImageUrl) {
+      setError("Please generate a storybook first!");
       return;
     }
 
     try {
       setPdfLoading(true);
-      console.log("Generating PDF...");
 
-      const res = await fetch("http://localhost:8000/generate-pdf", {
+      const response = await fetch(`${API_URL}/generate-pdf`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          story: text,
-          image_url: result,
-          prompt: prompt,
+          story: storyText,
+          image_url: generatedImageUrl,
+          prompt: generatedPrompt,
         }),
       });
 
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.detail || `Error generating PDF: ${res.status}`);
-        return;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || "PDF generation failed");
       }
 
-      // Download the PDF
-      const blob = await res.blob();
+      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `story_illustration_${Date.now()}.pdf`;
+      a.download = `${storyTitle || "story"}_${Date.now()}.pdf`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
 
-      console.log("PDF downloaded successfully");
     } catch (err) {
-      console.error("PDF generation error:", err);
-      setError(
-        err instanceof Error
-          ? `PDF error: ${err.message}`
-          : "Failed to generate PDF"
-      );
+      console.error("PDF error:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate PDF");
     } finally {
       setPdfLoading(false);
     }
   };
 
-  const clearAll = () => {
-    setText("");
-    setResult("");
-    setError("");
-    setPrompt("");
+  const resetStory = () => {
+    setStoryText("");
+    setStoryTitle("Untitled Story");
+    setGeneratedImageUrl("");
+    setGeneratedPrompt("");
     setGenerationId("");
+    setWordCount(0);
+    setCurrentView("writer");
   };
 
+  if (!isLoggedIn) {
+    return (
+      <div style={styles.loginScreen}>
+        <div style={styles.loginCard}>
+          <div style={styles.loginLogo}>
+            <div style={styles.logoMark}>✦</div>
+            <div style={styles.logoWordmark}>
+              <div style={styles.logoName}>
+                Quill<span style={{ color: "#16A34A" }}>Canvas</span>
+              </div>
+              <div style={styles.logoTagline}>AI STORYBOOK WRITER</div>
+            </div>
+          </div>
+
+          <h1 style={styles.loginHeading}>Welcome back</h1>
+          <p style={styles.loginSub}>Sign in to continue creating magical stories</p>
+
+          <button style={styles.btnGuest} onClick={doLogin}>
+            Continue as Guest
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={styles.container}>
-      {/* Left side - Story input */}
-      <div style={styles.left}>
-        <div style={styles.header}>
-          <h1 style={styles.heading}>Your Story</h1>
-          {text && (
-            <button style={styles.clearButton} onClick={clearAll}>
-              Clear
-            </button>
-          )}
+    <div style={styles.app}>
+      {/* Sidebar Overlay */}
+      {sidebarOpen && (
+        <div style={styles.sidebarOverlay} onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar */}
+      <aside style={{ ...styles.sidebar, ...(sidebarOpen ? styles.sidebarOpen : {}) }}>
+        <div style={styles.sidebarLogo}>
+          <div style={styles.logoMark}>✦</div>
+          <div style={styles.logoWordmark}>
+            <div style={styles.logoName}>
+              Quill<span style={{ color: "#16A34A" }}>Canvas</span>
+            </div>
+            <div style={styles.logoTagline}>AI STORYBOOK WRITER</div>
+          </div>
         </div>
 
-        <textarea
-          style={styles.textarea}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Start writing your story here...&#10;&#10;Press Cmd/Ctrl + Enter to generate"
-          disabled={loading}
-        />
-
-        <button
-          style={{
-            ...styles.button,
-            ...(loading ? styles.buttonDisabled : {}),
-          }}
-          onClick={generateIllustration}
-          disabled={loading || !text.trim()}
-        >
-          {loading ? "Generating..." : "Generate Illustration"}
-        </button>
-
-        {result && (
-          <button
-            style={{
-              ...styles.pdfButton,
-              ...(pdfLoading ? styles.buttonDisabled : {}),
-            }}
-            onClick={generatePDF}
-            disabled={pdfLoading || !result}
-          >
-            {pdfLoading ? "Creating PDF..." : "📄 Export to PDF"}
+        <div style={styles.sidebarActions}>
+          <button style={styles.btnNewStory} onClick={resetStory}>
+            ✦ New Story
           </button>
-        )}
+        </div>
 
-        {/* Show prompt if available */}
-        {prompt && (
-          <div style={styles.promptBox}>
-            <strong>Generated Prompt:</strong>
-            <div style={styles.promptText}>{prompt}</div>
+        <div style={styles.sidebarSection}>
+          <div style={styles.sectionLabel}>Recent Stories</div>
+          <div style={styles.storyItem}>
+            <span style={styles.storyDot}></span>
+            <span>The Weatherman's Letters</span>
           </div>
-        )}
+        </div>
+      </aside>
 
-        {/* Show generation ID for debugging */}
-        {generationId && (
-          <div style={styles.debugInfo}>Generation ID: {generationId}</div>
-        )}
-      </div>
+      {/* Main Content */}
+      <main style={styles.main}>
+        {/* Topbar */}
+        <div style={styles.topbar}>
+          <button
+            style={styles.btnHamburger}
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            ☰
+          </button>
 
-      {/* Right side - Image display */}
-      <div style={styles.right}>
-        {loading && (
-          <div style={styles.loadingBox}>
-            <div style={styles.spinner}></div>
-            <div style={styles.loadingText}>
-              Generating your illustration...
-              <br />
-              <span style={styles.loadingSubtext}>
-                This may take 30-60 seconds
-              </span>
-            </div>
-          </div>
-        )}
+          <input
+            style={styles.titleInput}
+            value={storyTitle}
+            onChange={(e) => setStoryTitle(e.target.value)}
+            placeholder="Untitled Story"
+          />
 
-        {error && !loading && (
-          <div style={styles.errorBox}>
-            <div style={styles.errorTitle}>⚠️ Error</div>
-            <div style={styles.errorText}>{error}</div>
-            <button style={styles.retryButton} onClick={generateIllustration}>
-              Retry
+          <div style={styles.actionsRow}>
+            {generatedImageUrl && (
+              <button
+                style={{ ...styles.btnAct, ...styles.btnSecondary }}
+                onClick={downloadPDF}
+                disabled={pdfLoading}
+              >
+                {pdfLoading ? "Creating PDF..." : "📄 Download PDF"}
+              </button>
+            )}
+            <button
+              style={styles.btnAct}
+              onClick={generateStory}
+              disabled={loading || !storyText.trim()}
+            >
+              ✨ Generate Story
             </button>
           </div>
-        )}
+        </div>
 
-        {result && !loading && !error && (
-          <div style={styles.imageContainer}>
-            <img
-              src={result}
-              alt="Generated illustration"
-              style={styles.image}
-              onError={() => setError("Failed to load image")}
-            />
-            <div style={styles.imageActions}>
-              <a
-                href={result}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={styles.link}
-              >
-                Open Full Size
-              </a>
-              <button
-                style={styles.downloadButton}
-                onClick={() => window.open(result, "_blank")}
-              >
-                Download
+        {/* Content Area */}
+        <div style={styles.contentArea}>
+          {/* Error Message */}
+          {error && (
+            <div style={styles.errorBox}>
+              <strong>⚠️ Error:</strong> {error}
+              <button style={styles.errorClose} onClick={() => setError("")}>
+                ✕
               </button>
             </div>
-          </div>
-        )}
+          )}
 
-        {!result && !loading && !error && (
-          <div style={styles.imagePlaceholder}>
-            <div style={styles.placeholderIcon}>🎨</div>
-            <div style={styles.placeholderText}>
-              Generated illustration will appear here
+          {/* Writer View */}
+          {currentView === "writer" && (
+            <div style={styles.view}>
+              <div style={styles.writerBox}>
+                <div style={styles.writerLabel}>
+                  <span>Your Story</span>
+                  <span style={styles.wordCount}>
+                    {wordCount} {wordCount === 1 ? "word" : "words"}
+                  </span>
+                </div>
+                <textarea
+                  style={styles.textarea}
+                  value={storyText}
+                  onChange={(e) => handleTextChange(e.target.value)}
+                  placeholder="Start writing your story here..."
+                />
+              </div>
             </div>
-            <div style={styles.placeholderSubtext}>
-              Write your story and click "Generate Illustration"
+          )}
+
+          {/* Generating View */}
+          {currentView === "generating" && (
+            <div style={styles.view}>
+              <div style={styles.genProgress}>
+                <h2 style={styles.genTitle}>✨ Generating Your Story</h2>
+                <p style={styles.genSub}>
+                  Please wait while AI creates your storybook...
+                </p>
+
+                <div style={styles.progressBar}>
+                  <div style={{ ...styles.progressFill, width: `${progress}%` }} />
+                </div>
+
+                <div style={styles.genSteps}>
+                  {steps.map((step, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        ...styles.genStep,
+                        ...(idx === currentStep ? styles.genStepActive : {}),
+                        ...(idx < currentStep ? styles.genStepDone : {}),
+                      }}
+                    >
+                      <span style={styles.genStepIcon}>
+                        {idx < currentStep ? "✓" : idx === currentStep ? "●" : "○"}
+                      </span>
+                      <span>{step}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+
+          {/* Storybook View */}
+          {currentView === "storybook" && (
+            <div style={styles.view}>
+              <div style={styles.bookDisplay}>
+                <div style={styles.bookSpread}>
+                  <div style={styles.bookPage}>
+                    <div style={styles.pageText}>{storyText}</div>
+                  </div>
+                  <div style={styles.bookPage}>
+                    {generatedImageUrl ? (
+                      <img
+                        src={generatedImageUrl}
+                        alt="Generated illustration"
+                        style={styles.pageImg}
+                      />
+                    ) : (
+                      <div style={styles.imgPlaceholder}>No image generated</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
 
 const styles: { [key: string]: React.CSSProperties } = {
-  container: {
-    display: "flex",
-    height: "100vh",
-    width: "100%",
-    fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
-  },
-  left: {
-    flex: 1,
-    padding: "40px",
-    display: "flex",
-    flexDirection: "column",
-    backgroundColor: "#f9f9f9",
-    gap: "16px",
-    minWidth: "400px",
-  },
-  right: {
-    flex: 1,
+  loginScreen: {
+    position: "fixed",
+    inset: 0,
+    background: "#F7FDF9",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#eaeaea",
-    padding: "40px",
-    minWidth: "400px",
-  },
-  header: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  heading: {
-    fontSize: "32px",
-    margin: 0,
-    fontWeight: 600,
-  },
-  clearButton: {
-    padding: "8px 16px",
-    fontSize: "14px",
-    backgroundColor: "transparent",
-    color: "#666",
-    border: "1px solid #ccc",
-    borderRadius: "6px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-  },
-  textarea: {
-    flex: 1,
-    width: "100%",
-    padding: "20px",
-    fontSize: "16px",
-    lineHeight: 1.6,
-    border: "1px solid #ddd",
-    borderRadius: "8px",
-    resize: "none",
-    outline: "none",
-    fontFamily: "inherit",
-    transition: "border-color 0.2s",
-  },
-  button: {
-    padding: "14px 24px",
-    fontSize: "16px",
-    fontWeight: 600,
-    backgroundColor: "#111",
-    color: "white",
-    border: "none",
-    borderRadius: "8px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-  },
-  buttonDisabled: {
-    backgroundColor: "#999",
-    cursor: "not-allowed",
-  },
-  pdfButton: {
-    padding: "14px 24px",
-    fontSize: "16px",
-    fontWeight: 600,
-    backgroundColor: "#0066cc",
-    color: "white",
-    border: "none",
-    borderRadius: "8px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    boxShadow: "0 2px 4px rgba(0,0,0,0.1)",
-  },
-  promptBox: {
     padding: "16px",
-    backgroundColor: "#fff",
-    border: "1px solid #ddd",
-    borderRadius: "8px",
-    fontSize: "14px",
-    lineHeight: 1.5,
   },
-  promptText: {
-    marginTop: "8px",
-    color: "#555",
-    fontStyle: "italic",
+  loginCard: {
+    background: "#FFFFFF",
+    border: "1px solid #E4EDE8",
+    borderRadius: "24px",
+    padding: "40px",
+    width: "100%",
+    maxWidth: "400px",
+    boxShadow: "0 24px 64px rgba(0,0,0,.14)",
   },
-  debugInfo: {
-    fontSize: "12px",
-    color: "#999",
-    fontFamily: "monospace",
-  },
-  loadingBox: {
-    textAlign: "center",
-  },
-  spinner: {
-    border: "4px solid #f3f3f3",
-    borderTop: "4px solid #111",
-    borderRadius: "50%",
-    width: "50px",
-    height: "50px",
-    animation: "spin 1s linear infinite",
-    margin: "0 auto 20px",
-  },
-  loadingText: {
-    fontSize: "18px",
-    color: "#333",
-    fontWeight: 500,
-  },
-  loadingSubtext: {
-    fontSize: "14px",
-    color: "#666",
-    fontWeight: 400,
-    marginTop: "8px",
-    display: "block",
-  },
-  errorBox: {
-    maxWidth: "500px",
-    padding: "30px",
-    backgroundColor: "#fff",
-    border: "2px solid #ff4444",
-    borderRadius: "12px",
-    textAlign: "center",
-  },
-  errorTitle: {
-    fontSize: "24px",
-    fontWeight: 600,
-    color: "#ff4444",
-    marginBottom: "16px",
-  },
-  errorText: {
-    fontSize: "16px",
-    color: "#666",
-    marginBottom: "20px",
-    lineHeight: 1.5,
-    whiteSpace: "pre-wrap",
-  },
-  retryButton: {
-    padding: "12px 24px",
-    fontSize: "16px",
-    backgroundColor: "#111",
-    color: "white",
-    border: "none",
-    borderRadius: "8px",
-    cursor: "pointer",
-    fontWeight: 600,
-  },
-  imagePlaceholder: {
-    width: "80%",
-    maxWidth: "500px",
-    height: "60%",
-    border: "2px dashed #999",
-    borderRadius: "12px",
+  loginLogo: {
     display: "flex",
-    flexDirection: "column",
+    alignItems: "center",
+    gap: "10px",
+    marginBottom: "28px",
+  },
+  logoMark: {
+    width: "36px",
+    height: "36px",
+    background: "#166534",
+    borderRadius: "8px",
+    display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "#666",
-    textAlign: "center",
-    padding: "40px",
+    color: "#fff",
+    fontSize: "20px",
+    flexShrink: 0,
   },
-  placeholderIcon: {
-    fontSize: "64px",
-    marginBottom: "20px",
+  logoWordmark: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "2px",
   },
-  placeholderText: {
-    fontSize: "18px",
-    fontWeight: 500,
-    marginBottom: "8px",
+  logoName: {
+    fontSize: "16px",
+    fontWeight: 700,
+    letterSpacing: "-.4px",
+    color: "#0F1C14",
   },
-  placeholderSubtext: {
-    fontSize: "14px",
-    color: "#999",
+  logoTagline: {
+    fontSize: "10px",
+    color: "#8FA89A",
+    letterSpacing: ".2px",
   },
-  imageContainer: {
+  loginHeading: {
+    fontSize: "22px",
+    fontWeight: 700,
+    letterSpacing: "-.4px",
+    marginBottom: "6px",
+  },
+  loginSub: {
+    fontSize: "13px",
+    color: "#8FA89A",
+    marginBottom: "28px",
+  },
+  btnGuest: {
     width: "100%",
+    background: "none",
+    border: "1px solid #E4EDE8",
+    borderRadius: "8px",
+    padding: "12px",
+    cursor: "pointer",
+    fontSize: "13px",
+    fontWeight: 500,
+    color: "#4B6155",
+    transition: "all .15s",
+  },
+  app: {
+    display: "flex",
+    width: "100%",
+    height: "100vh",
+    overflow: "hidden",
+    fontFamily: "Inter, sans-serif",
+    background: "#F7FDF9",
+  },
+  sidebarOverlay: {
+    display: "block",
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,.4)",
+    zIndex: 99,
+  },
+  sidebar: {
+    width: "248px",
+    height: "100%",
+    background: "#FFFFFF",
+    borderRight: "1px solid #E4EDE8",
+    display: "flex",
+    flexDirection: "column",
+    flexShrink: 0,
+    zIndex: 100,
+    transition: "transform .22s ease",
+  },
+  sidebarOpen: {
+    transform: "translateX(0)",
+  },
+  sidebarLogo: {
+    display: "flex",
+    alignItems: "center",
+    gap: "10px",
+    padding: "18px 20px",
+    borderBottom: "1px solid #E4EDE8",
+  },
+  sidebarActions: {
+    padding: "14px 12px",
+  },
+  btnNewStory: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    width: "100%",
+    padding: "9px 14px",
+    background: "#16A34A",
+    color: "#fff",
+    border: "none",
+    borderRadius: "8px",
+    fontSize: "13px",
+    fontWeight: 500,
+    cursor: "pointer",
+    transition: "background .15s",
+  },
+  sidebarSection: {
+    flex: 1,
+    padding: "8px 12px 0",
+    overflowY: "auto",
+  },
+  sectionLabel: {
+    fontSize: "10px",
+    fontWeight: 600,
+    textTransform: "uppercase",
+    letterSpacing: ".8px",
+    color: "#8FA89A",
+    padding: "0 6px",
+    marginBottom: "6px",
+  },
+  storyItem: {
+    display: "flex",
+    alignItems: "center",
+    gap: "9px",
+    padding: "8px 10px",
+    borderRadius: "8px",
+    fontSize: "13px",
+    color: "#4B6155",
+    cursor: "pointer",
+    background: "#DCFCE7",
+    fontWeight: 500,
+  },
+  storyDot: {
+    width: "6px",
+    height: "6px",
+    borderRadius: "50%",
+    background: "#4ADE80",
+    flexShrink: 0,
+  },
+  main: {
+    flex: 1,
     height: "100%",
     display: "flex",
     flexDirection: "column",
-    gap: "16px",
+    overflow: "hidden",
+    minWidth: 0,
   },
-  image: {
-    width: "100%",
-    height: "calc(100% - 60px)",
-    objectFit: "contain",
-    backgroundColor: "white",
-    borderRadius: "12px",
-    boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
-  },
-  imageActions: {
+  topbar: {
     display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
     gap: "12px",
+    padding: "18px 40px",
+    background: "#FFFFFF",
+    borderBottom: "1px solid #E4EDE8",
+  },
+  btnHamburger: {
+    display: "none",
+    width: "32px",
+    height: "32px",
+    border: "1px solid #E4EDE8",
+    background: "#fff",
+    borderRadius: "8px",
+    cursor: "pointer",
+    fontSize: "16px",
+    color: "#4B6155",
+  },
+  titleInput: {
+    flex: 1,
+    fontSize: "16px",
+    fontWeight: 600,
+    border: "none",
+    outline: "none",
+    background: "transparent",
+    color: "#0F1C14",
+    padding: "4px 8px",
+    borderRadius: "8px",
+  },
+  actionsRow: {
+    display: "flex",
+    gap: "8px",
+    alignItems: "center",
+  },
+  btnAct: {
+    padding: "8px 14px",
+    background: "#16A34A",
+    color: "#fff",
+    border: "none",
+    borderRadius: "8px",
+    fontSize: "13px",
+    fontWeight: 500,
+    cursor: "pointer",
+    transition: "background .15s",
+    whiteSpace: "nowrap",
+  },
+  btnSecondary: {
+    background: "#fff",
+    color: "#15803D",
+    border: "1px solid #86EFAC",
+  },
+  contentArea: {
+    flex: 1,
+    overflowY: "auto",
+    padding: "40px",
+  },
+  errorBox: {
+    background: "#FEE2E2",
+    border: "1px solid #DC2626",
+    borderRadius: "12px",
+    padding: "16px",
+    marginBottom: "20px",
+    fontSize: "14px",
+    color: "#991B1B",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  errorClose: {
+    background: "none",
+    border: "none",
+    fontSize: "18px",
+    cursor: "pointer",
+    color: "#DC2626",
+  },
+  view: {
+    display: "block",
+  },
+  writerBox: {
+    background: "#FFFFFF",
+    border: "1px solid #E4EDE8",
+    borderRadius: "16px",
+    padding: "24px",
+  },
+  writerLabel: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    fontSize: "13px",
+    fontWeight: 500,
+    color: "#4B6155",
+    marginBottom: "12px",
+  },
+  wordCount: {
+    fontSize: "11px",
+    color: "#8FA89A",
+    fontWeight: 400,
+  },
+  textarea: {
+    width: "100%",
+    minHeight: "500px",
+    padding: "16px",
+    border: "1px solid #E4EDE8",
+    borderRadius: "12px",
+    fontSize: "14px",
+    lineHeight: 1.8,
+    color: "#0F1C14",
+    background: "#F7FDF9",
+    resize: "vertical",
+    outline: "none",
+    fontFamily: "Inter, sans-serif",
+  },
+  genProgress: {
+    background: "#FFFFFF",
+    border: "1px solid #E4EDE8",
+    borderRadius: "16px",
+    padding: "32px",
+    textAlign: "center",
+  },
+  genTitle: {
+    fontSize: "20px",
+    fontWeight: 600,
+    marginBottom: "12px",
+  },
+  genSub: {
+    color: "#8FA89A",
+    fontSize: "13px",
+    marginBottom: "20px",
+  },
+  progressBar: {
+    width: "100%",
+    height: "8px",
+    background: "#DCFCE7",
+    borderRadius: "4px",
+    overflow: "hidden",
+    margin: "20px 0",
+  },
+  progressFill: {
+    height: "100%",
+    background: "#16A34A",
+    transition: "width .3s",
+  },
+  genSteps: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "12px",
+    marginTop: "24px",
+  },
+  genStep: {
+    display: "flex",
+    alignItems: "center",
+    gap: "12px",
+    fontSize: "13px",
+    color: "#8FA89A",
+  },
+  genStepActive: {
+    color: "#15803D",
+    fontWeight: 500,
+  },
+  genStepDone: {
+    color: "#16A34A",
+  },
+  genStepIcon: {
+    fontSize: "14px",
+  },
+  bookDisplay: {
+    background: "#FFFFFF",
+    border: "1px solid #E4EDE8",
+    borderRadius: "16px",
+    padding: "32px",
+  },
+  bookSpread: {
+    display: "flex",
+    gap: "20px",
+  },
+  bookPage: {
+    flex: 1,
+    background: "#fff",
+    border: "1px solid #ddd",
+    borderRadius: "8px",
+    padding: "24px",
+    minHeight: "500px",
+    boxShadow: "0 2px 8px rgba(0,0,0,.05)",
+  },
+  pageText: {
+    fontSize: "14px",
+    lineHeight: 1.8,
+    color: "#333",
+    whiteSpace: "pre-wrap",
+  },
+  pageImg: {
+    width: "100%",
+    height: "auto",
+    borderRadius: "8px",
+  },
+  imgPlaceholder: {
+    background: "#f5f5f5",
+    border: "2px dashed #ccc",
+    borderRadius: "8px",
+    padding: "40px",
+    textAlign: "center",
+    color: "#999",
+    minHeight: "400px",
+    display: "flex",
+    alignItems: "center",
     justifyContent: "center",
   },
-  link: {
-    padding: "10px 20px",
-    fontSize: "14px",
-    color: "#111",
-    textDecoration: "none",
-    border: "1px solid #111",
-    borderRadius: "6px",
-    transition: "all 0.2s",
-  },
-  downloadButton: {
-    padding: "10px 20px",
-    fontSize: "14px",
-    backgroundColor: "#111",
-    color: "white",
-    border: "none",
-    borderRadius: "6px",
-    cursor: "pointer",
-    fontWeight: 600,
-  },
 };
-
-// Add keyframe animation for spinner
-const styleSheet = document.createElement("style");
-styleSheet.textContent = `
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-  }
-`;
-document.head.appendChild(styleSheet);
